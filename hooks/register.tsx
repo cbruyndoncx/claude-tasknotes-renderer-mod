@@ -138,7 +138,7 @@ async function loadVault($: EngineInterface, root: string): Promise<Vault> {
 
 type Parsed = { what: string; view?: string; layout?: Layout }
 
-/** `/tasknotes [base|alias] [view] [--board|--list|--agenda|--graph]`. */
+/** `/taskboard [base|alias] [view] [--board|--list|--agenda|--graph]`. */
 function parseArgs(args: string): Parsed {
   let rest = args.trim()
   let layout: Layout | undefined
@@ -299,7 +299,7 @@ async function show($: EngineInterface, args: Parsed): Promise<string> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'tasknotes',
+      name: 'taskboard',
       description: 'Show TaskNotes tasks from a .base view: board, list, agenda or dependency graph',
       argumentHint: '[kanban|tasks|agenda|calendar|<file.base>] [view] [--board|--list|--agenda|--graph]',
     })
@@ -323,7 +323,7 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'tasknotes' }, async ($, e) => ({ text: await show($, parseArgs(e.args)) }))
+  on('command.run', { command: 'taskboard' }, async ($, e) => ({ text: await show($, parseArgs(e.args)) }))
 
   on('tool.call', { tool: 'mcp__tasknotes-preview__open' }, async ($, e) => {
     const parsed: Parsed = { what: cleanArg(String(e.base ?? '')) || 'tasks' }
@@ -360,7 +360,7 @@ export const register: Register = on => {
         $.ui.toast(`Could not open Obsidian: ${errorText(err)}`)
       }
     }
-    const empty = 'No tasks open. Run /tasknotes, or /tasknotes kanban, or /tasknotes <file.base>.'
+    const empty = 'No tasks open. Run /taskboard, or /taskboard kanban, or /taskboard <file.base>.'
 
     let drawn: Drawn | undefined
     let failure: string | undefined
