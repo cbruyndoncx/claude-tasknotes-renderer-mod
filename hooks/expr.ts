@@ -466,8 +466,8 @@ export function compare(a: Val, b: Val): number {
 function containsValue(list: Val[], needle: Val): boolean {
   return list.some(item => {
     if (equals(item, needle)) return true
-    // Tags compare without their '#'.
-    return typeof item === 'string' && typeof needle === 'string' && item.replace(/^#/, '').toLowerCase() === needle.replace(/^#/, '').toLowerCase()
+    // Tags compare without their '#'; like Obsidian, case counts.
+    return typeof item === 'string' && typeof needle === 'string' && item.replace(/^#/, '') === needle.replace(/^#/, '')
   })
 }
 

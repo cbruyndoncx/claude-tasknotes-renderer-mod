@@ -96,6 +96,8 @@ test('expr: arithmetic, lambdas, strings, durations and dates', async () => {
   expect(ev.eval('file.inFolder("TaskNotes/Tasks")')).toBe(true)
   expect(ev.eval('(10 / 4).round(1)')).toBe(2.5)
   expect(ev.eval('["queue/decision", "x"].hasTag("queue")')).toBe(true)
+  expect(ev.eval('list(assignee).contains("Agent")')).toBe(false) // case counts, as in Obsidian
+  expect(ev.eval('["#task"].contains("task")')).toBe(true)
   expect(toDuration('1 week 2 days')?.ms).toBe(9 * 86400000)
   expect(toDate('2026-10-03T07:00:00Z')?.ms).toBe(Date.UTC(2026, 9, 3, 7))
   expect(toDate('2026-10-03 09:00:00+02:00')?.ms).toBe(Date.UTC(2026, 9, 3, 7))
