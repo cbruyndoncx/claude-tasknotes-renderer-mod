@@ -1,0 +1,6 @@
+# Written by Claude Code beside a loaded mod; regenerate with /plugin-types
+.claude-plugin/types/
+.claude/types/
+node_modules/
+.DS_Store
+Thumbs.db

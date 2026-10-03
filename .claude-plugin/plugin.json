@@ -1,0 +1,7 @@
+{
+  "name": "tasknotes-preview",
+  "version": "0.1.0",
+  "description": "Show Obsidian TaskNotes tasks from a .base view as a board, list, agenda or dependency graph in a Claude Desktop side pane",
+  "author": { "name": "BRNCX" },
+  "types": "./types/index.d.ts"
+}
