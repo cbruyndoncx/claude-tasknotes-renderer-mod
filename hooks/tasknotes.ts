@@ -43,7 +43,7 @@ const DEFAULT_VIEW_FILES: Record<string, string> = {
   relationships: 'TaskNotes/Views/relationships.base',
 }
 
-/** Short names for `/tasks <name>`, each a TaskNotes command whose base file it opens. */
+/** Short names for `/tasknotes <name>`, each a TaskNotes command whose base file it opens. */
 export const VIEW_ALIASES: Record<string, string> = {
   kanban: 'open-kanban-view',
   board: 'open-kanban-view',

@@ -26,10 +26,10 @@ pane redraws after every Write or Edit to a note, the base or TaskNotes' setting
 
 ## Use
 
-- `/tasks`: the file TaskNotes opens for its tasks view.
-- `/tasks kanban` (or `tasks`, `agenda`, `calendar`, `mini-calendar`, `relationships`): the
+- `/tasknotes`: the file TaskNotes opens for its tasks view.
+- `/tasknotes kanban` (or `tasks`, `agenda`, `calendar`, `mini-calendar`, `relationships`): the
   `.base` file TaskNotes opens for that command (its `commandFileMapping` setting).
-- `/tasks <file.base> [view name or number] [--board|--list|--agenda|--graph]`
+- `/tasknotes <file.base> [view name or number] [--board|--list|--agenda|--graph]`
 - Or just ask Claude ("show my overdue tasks", "show the dependency graph of the kanban").
   The mod registers the model tool `mcp__tasknotes-preview__open` with `base`, `view` and
   `layout`. Its answer includes counts per column, so Claude knows what you are looking at.

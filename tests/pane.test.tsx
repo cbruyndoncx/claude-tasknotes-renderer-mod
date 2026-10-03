@@ -68,9 +68,9 @@ const mount = ($: Parameters<Parameters<typeof test>[1]>[0], surface: 'desktop' 
     props: { title: 'Tasks', isFocused: false, bodyColumns: 120, placement: 'dock' },
   })
 
-test('/tasks kanban opens the TaskNotes kanban base as a board with status columns', async ($, on) => {
+test('/tasknotes kanban opens the TaskNotes kanban base as a board with status columns', async ($, on) => {
   serveVault(on)
-  const ran = await $.command.run({ command: 'tasks', args: 'kanban' })
+  const ran = await $.command.run({ command: 'tasknotes', args: 'kanban' })
   expect(ran.text).toContain('Showing TaskNotes/Views/kanban.base in the Tasks pane.')
   expect(ran.text).toContain('Kanban Board (tasknotesKanban): 6 tasks; None 0, Backlog 1, Next 2, In progress 1, Awaiting Input 1, Done 1, Cancelled 0')
   const ui = await mount($)
@@ -87,7 +87,7 @@ test('/tasks kanban opens the TaskNotes kanban base as a board with status colum
 
 test('the view picker switches views; each draws its own way', async ($, on) => {
   serveVault(on)
-  const ran = await $.command.run({ command: 'tasks', args: 'TaskNotes/Views/tasks.base' })
+  const ran = await $.command.run({ command: 'tasknotes', args: 'TaskNotes/Views/tasks.base' })
   expect(ran.text).toContain('Not Blocked (tasknotesTaskList): 2 tasks')
   const ui = await mount($)
   expect((await ui.find({ key: 'layout-list' }))?.props.variant).toBe('primary')
@@ -102,20 +102,20 @@ test('the view picker switches views; each draws its own way', async ($, on) => 
 
 test('a view by name and a layout flag on the command; unknown views are listed', async ($, on) => {
   serveVault(on)
-  const ran = await $.command.run({ command: 'tasks', args: 'tasks This Week --board' })
+  const ran = await $.command.run({ command: 'tasknotes', args: 'tasks This Week --board' })
   expect(ran.text).toContain('This Week (tasknotesTaskList): 3 tasks;')
   const ui = await mount($)
   expect((await ui.find({ key: 'layout-board' }))?.props.variant).toBe('primary')
   await ui.unmount()
-  const bad = await $.command.run({ command: 'tasks', args: 'tasks Someday' })
+  const bad = await $.command.run({ command: 'tasknotes', args: 'tasks Someday' })
   expect(bad.text).toContain('no view "Someday"; there are: 1. Not Blocked, 2. This Week, 3. TableView, 4. Odd')
-  const missing = await $.command.run({ command: 'tasks', args: 'nowhere.base' })
+  const missing = await $.command.run({ command: 'tasknotes', args: 'nowhere.base' })
   expect(missing.text).toContain('nowhere.base not found')
 })
 
 test('agenda: overdue on top, then today and the coming days', async ($, on) => {
   serveVault(on)
-  await $.command.run({ command: 'tasks', args: 'agenda' })
+  await $.command.run({ command: 'tasknotes', args: 'agenda' })
   const ui = await mount($)
   expect((await ui.find({ key: 'layout-agenda' }))?.props.variant).toBe('primary')
   expect(await ui.find({ type: 'Text', text: 'Overdue · 1' })).toBeDefined()
@@ -149,7 +149,7 @@ test('layout buttons redraw the same rows; long columns fold behind "Show all"',
   for (let k = 0; k < 14; k++) {
     host.content[`TaskNotes/Tasks/Chore ${k}.md`] = `---\ntitle: Chore ${k}\ntype: task\nstatus: open\n---\n`
   }
-  await $.command.run({ command: 'tasks', args: 'kanban' })
+  await $.command.run({ command: 'tasknotes', args: 'kanban' })
   const ui = await mount($)
   expect(await ui.find({ type: 'Text', text: 'Chore 13' })).toBeUndefined() // 15 in Backlog, 12 shown
   await ui.press({ key: 'more:open' })
@@ -164,7 +164,7 @@ test('an agent Edit of a task note redraws the pane; unchanged notes are not rea
   const reads: string[] = []
   const host = serveVault(on, { reads })
   on('tool.call', { tool: 'Edit' }, () => ({ result: { ok: true } }))
-  await $.command.run({ command: 'tasks', args: 'kanban' })
+  await $.command.run({ command: 'tasknotes', args: 'kanban' })
   const ui = await mount($)
   reads.length = 0
   host.touch('TaskNotes/Tasks/Write docs.md', (host.content['TaskNotes/Tasks/Write docs.md'] ?? '').replace('status: open', 'status: in-progress'))
@@ -178,9 +178,9 @@ test('an agent Edit of a task note redraws the pane; unchanged notes are not rea
 
 test('outside a vault an alias explains itself; the terminal gets a text account', async ($, on) => {
   serveVault(on, { cwd: 'D:\\elsewhere' })
-  const ran = await $.command.run({ command: 'tasks', args: 'kanban' })
+  const ran = await $.command.run({ command: 'tasknotes', args: 'kanban' })
   expect(ran.text).toContain('this session is not inside an Obsidian vault')
-  await $.command.run({ command: 'tasks', args: `${ROOT}\\TaskNotes\\Views\\kanban.base` })
+  await $.command.run({ command: 'tasknotes', args: `${ROOT}\\TaskNotes\\Views\\kanban.base` })
   const term = await mount($, 'terminal')
   expect(await term.find({ type: 'Text', text: /Kanban Board \(tasknotesKanban\): 6 tasks/ })).toBeDefined()
   await term.unmount()
