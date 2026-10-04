@@ -27,8 +27,8 @@ import {
 import type { Target } from './common'
 import { FileV, linkKey, toDate } from './expr'
 import { buildGraph, graphSvg } from './graph'
-import { buildModel, columnsOf } from './model'
-import type { Card, Column, Model } from './model'
+import { buildModel, columnsOf, facets, narrow } from './model'
+import type { Card, Column, Facet, Filters, Model } from './model'
 import { VIEW_ALIASES, fieldKey, parseSettings, toTask } from './tasknotes'
 import type { Task, TaskNotesSettings } from './tasknotes'
 import { splitFrontmatter } from './yaml'
@@ -136,12 +136,22 @@ async function loadVault($: EngineInterface, root: string): Promise<Vault> {
 
 // ── targets ──────────────────────────────────────────────────────────────
 
-type Parsed = { what: string; view?: string; layout?: Layout }
+type Parsed = { what: string; view?: string; layout?: Layout; projects?: string[]; contexts?: string[] }
 
-/** `/taskboard [base|alias] [view] [--board|--list|--agenda|--graph]`. */
+/** A comma-separated filter value: `Platform, Website` → ['Platform', 'Website']. */
+function names(value: unknown): string[] {
+  return String(value ?? '').split(',').map(s => cleanArg(s).replace(/^\[\[|\]\]$/g, '')).filter(Boolean)
+}
+
+/** `/taskboard [base|alias] [view] [--board|--list|--agenda|--graph] [--project=A,B] [--context=X]`. */
 function parseArgs(args: string): Parsed {
   let rest = args.trim()
   let layout: Layout | undefined
+  const picked: { projects: string[]; contexts: string[] } = { projects: [], contexts: [] }
+  for (const m of [...rest.matchAll(/\s*--(project|context)=("[^"]*"|\S+)/gi)]) {
+    picked[(m[1] ?? '').toLowerCase() === 'project' ? 'projects' : 'contexts'].push(...names(m[2]))
+  }
+  rest = rest.replace(/\s*--(project|context)=("[^"]*"|\S+)/gi, '').trim()
   const flag = /\s*--(board|list|agenda|graph)\b/i.exec(rest)
   if (flag) {
     layout = (flag[1] ?? '').toLowerCase() as Layout
@@ -168,6 +178,8 @@ function parseArgs(args: string): Parsed {
   const parsed: Parsed = { what: cleanArg(what) || 'tasks' }
   if (rest.trim()) parsed.view = cleanArg(rest)
   if (layout) parsed.layout = layout
+  if (picked.projects.length) parsed.projects = picked.projects
+  if (picked.contexts.length) parsed.contexts = picked.contexts
   return parsed
 }
 
@@ -227,13 +239,26 @@ async function openInObsidian($: EngineInterface, target: Target): Promise<strin
 
 // ── evaluation ───────────────────────────────────────────────────────────
 
-type Drawn = { config: BaseConfig; vault: Vault; model: Model; layout: Layout; now: number }
+type Drawn = {
+  config: BaseConfig
+  vault: Vault
+  /** The whole view, as the base defines it. */
+  all: Model
+  /** The view narrowed by the pills: what the pane draws. */
+  model: Model
+  layout: Layout
+  now: number
+}
+
+function filtersOf(t: TasksTarget): Filters {
+  return { projects: t.projects ?? [], contexts: t.contexts ?? [] }
+}
 
 /**
  * The last evaluations, by base, view, the notes' modification times and the minute. A
  * layout, expand or zoom press redraws the pane; it should not run every filter again.
  */
-const evaluations = new Map<string, Omit<Drawn, 'layout'>>()
+const evaluations = new Map<string, Omit<Drawn, 'layout' | 'model'>>()
 
 async function evaluate($: EngineInterface, t: TasksTarget): Promise<Drawn> {
   const [vault, source] = await Promise.all([loadVault($, t.root), $.fs.read(t.real)])
@@ -241,28 +266,32 @@ async function evaluate($: EngineInterface, t: TasksTarget): Promise<Drawn> {
   const signature = vault.files.reduce((h, f) => (Math.imul(h, 31) + f.mtime + f.path.length) | 0, vault.files.length)
   const key = `${t.real}|${t.view}|${source.length}|${Array.from(source).reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 7)}|${signature}|${Math.floor(now / 60000)}`
   const cached = evaluations.get(key)
-  if (cached) return { ...cached, layout: t.layout ?? cached.model.natural }
+  if (cached) return { ...cached, model: narrow(cached.all, filtersOf(t)), layout: t.layout ?? cached.all.natural }
   const config = parseBase(source)
   const view = config.views[Math.min(t.view, config.views.length - 1)] ?? config.views[0]
   if (!view) throw new Error('the base has no views')
   const thisFile = new FileV(t.rel, {}, now, now, source.length, [], [])
-  const model = buildModel({ config, view, files: vault.files, taskOf: vault.taskOf, ctx: { now, thisFile, resolve: vault.resolve } })
+  const all = buildModel({ config, view, files: vault.files, taskOf: vault.taskOf, ctx: { now, thisFile, resolve: vault.resolve } })
   evaluations.clear()
-  evaluations.set(key, { config, vault, model, now })
-  return { config, vault, model, layout: t.layout ?? model.natural, now }
+  evaluations.set(key, { config, vault, all, now })
+  return { config, vault, all, model: narrow(all, filtersOf(t)), layout: t.layout ?? all.natural, now }
 }
 
 /** A short text account of what the pane shows: the model tool's answer and the terminal's pane. */
-function summarize(d: Drawn): string {
-  const { model, config, vault, now } = d
-  const head = `${model.view.name} (${model.view.type}): ${model.matched} task${model.matched === 1 ? '' : 's'}`
+function summarize(d: Drawn, t: TasksTarget): string {
+  const { model, all, config, vault, now } = d
+  const f = filtersOf(t)
+  const filter = [...f.projects.map(p => `project ${p}`), ...f.contexts.map(c => `context @${c}`)].join(', ')
+  const head = filter
+    ? `${model.view.name} (${model.view.type}), filtered to ${filter}: ${model.matched} of ${all.matched} tasks`
+    : `${model.view.name} (${model.view.type}): ${model.matched} task${model.matched === 1 ? '' : 's'}`
   if (d.layout === 'agenda') {
     const agenda = buildAgenda(model.tasks, now, Number(model.view.options.listDayCount) || 7)
     const days = agenda.days.filter(x => x.items.length).map(x => `${dayLabel(x.date, now)} ${x.items.length}`)
     return `${head}; overdue ${agenda.overdue.length}${days.length ? `; ${days.join(', ')}` : ''}`
   }
   if (d.layout === 'graph') {
-    const g = buildGraph(model.tasks, vault.tasks)
+    const g = buildGraph(model.tasks, vault.tasks, { hideDone: !!t.hideDone })
     return `${head}; ${g.edges.length} dependencies among ${g.nodes.length} tasks; critical path ${Math.round(g.criticalDays * 10) / 10} days`
   }
   const columns = columnsOf(model, config, vault.settings, vault.tasks, now, d.layout === 'board' ? 'board' : 'list')
@@ -278,6 +307,8 @@ async function show($: EngineInterface, args: Parsed): Promise<string> {
   if (typeof view !== 'number') return `tasknotes-preview: ${located.rel}: ${view.error}`
   const value: TasksTarget = { ...located, view, expanded: [], orientation: 'landscape', zoom: 1, pan: 0, rev: Date.now() }
   if (args.layout) value.layout = args.layout
+  if (args.projects?.length) value.projects = args.projects
+  if (args.contexts?.length) value.contexts = args.contexts
   await $.state.set({ ...TARGET, id: PANE }, value)
   const isOpen = await $.ui.panes().then(ps => ps.some(p => p.id === PANE)).catch(() => false)
   if (isOpen) await $.ui.close({ id: PANE }).catch(() => undefined)
@@ -285,7 +316,7 @@ async function show($: EngineInterface, args: Parsed): Promise<string> {
   const opened = await $.ui.open({ id: PANE, title: `Tasks · ${viewName}`, focus: true })
   let account = ''
   try {
-    account = summarize(await evaluate($, value))
+    account = summarize(await evaluate($, value), value)
   } catch (err) {
     account = `could not evaluate it: ${errorText(err)}`
   }
@@ -301,7 +332,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'taskboard',
       description: 'Show TaskNotes tasks from a .base view: board, list, agenda or dependency graph',
-      argumentHint: '[kanban|tasks|agenda|calendar|<file.base>] [view] [--board|--list|--agenda|--graph]',
+      argumentHint: '[kanban|tasks|agenda|calendar|<file.base>] [view] [--board|--list|--agenda|--graph] [--project=A,B] [--context=X]',
     })
     await $.tool.register({
       name: 'open',
@@ -310,13 +341,16 @@ export const register: Register = on => {
         'Obsidian shows it: as a kanban board, a grouped list, an agenda of the coming days, or a dependency graph ' +
         '(blockedBy arrows with the critical path). Returns a short account of what it shows (counts per column). ' +
         'base: a .base path, or one of kanban, tasks, agenda, calendar, relationships (the files TaskNotes opens ' +
-        'for those commands); default tasks. view: a view name or 1-based number. layout: board, list, agenda or graph.',
+        'for those commands); default tasks. view: a view name or 1-based number. layout: board, list, agenda or graph. ' +
+        'project / context: narrow the view to tasks in these projects or contexts (comma-separated names).',
       inputSchema: {
         type: 'object',
         properties: {
           base: { type: 'string', description: 'A .base path, or kanban | tasks | agenda | calendar | relationships' },
           view: { type: 'string', description: 'Optional view name or 1-based number' },
           layout: { type: 'string', enum: LAYOUTS, description: 'Optional: board, list, agenda or graph' },
+          project: { type: 'string', description: 'Optional: only tasks in these projects (comma-separated)' },
+          context: { type: 'string', description: 'Optional: only tasks with these contexts (comma-separated)' },
         },
       },
     })
@@ -329,6 +363,8 @@ export const register: Register = on => {
     const parsed: Parsed = { what: cleanArg(String(e.base ?? '')) || 'tasks' }
     if (e.view !== undefined && String(e.view).trim()) parsed.view = String(e.view).trim()
     if (typeof e.layout === 'string' && (LAYOUTS as string[]).includes(e.layout)) parsed.layout = e.layout as Layout
+    if (names(e.project).length) parsed.projects = names(e.project)
+    if (names(e.context).length) parsed.contexts = names(e.context)
     return { result: await show($, parsed) }
   })
 
@@ -377,7 +413,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           <Text>{t ? t.rel : empty}</Text>
-          {drawn && <Text>{summarize(drawn)}</Text>}
+          {drawn && <Text>{summarize(drawn, t as TasksTarget)}</Text>}
           {failure && <Text color="red">{failure}</Text>}
           <Text dimColor>The board, agenda and graph are drawn in the Desktop Code tab.</Text>
         </Box>
@@ -390,7 +426,9 @@ export const register: Register = on => {
     if (!t) return <Text dimColor>{empty}</Text>
     if (!drawn) return <Text color="red">Cannot show {t.rel}: {failure}</Text>
 
-    const { model, config, vault, layout, now } = drawn
+    const { model, all, config, vault, layout, now } = drawn
+    const filters = filtersOf(t)
+    const filtering = filters.projects.length + filters.contexts.length > 0
     const settings = vault.settings
     const isExpanded = (key: string) => t.expanded.includes(`${layout}:${key}`)
     const expand = (key: string) => patch({ expanded: [...t.expanded, `${layout}:${key}`] })
@@ -452,8 +490,40 @@ export const register: Register = on => {
       )
     }
 
+    // Pills: the projects and contexts of the whole view, most used first. A press toggles one;
+    // several in a row widen (any of them), the two rows narrow each other (both must hold).
+    const facetsOf = facets(all.tasks)
+    const PILLS = 10
+    const pillRow = (kind: 'project' | 'context', label: string, list: Facet[], selected: string[], prefix: string) => {
+      if (!list.length) return undefined
+      const chosen = selected.map(s => s.toLowerCase())
+      const field = kind === 'project' ? 'projects' : 'contexts'
+      const toggle = (name: string) =>
+        patch({ [field]: chosen.includes(name.toLowerCase()) ? selected.filter(s => s.toLowerCase() !== name.toLowerCase()) : [...selected, name] } as Partial<TasksTarget>)
+      // Selected pills always show, even beyond the cap.
+      const visible = t.allPills ? list : list.filter((f, i) => i < PILLS || chosen.includes(f.name.toLowerCase()))
+      return (
+        <Box key={`pills-${kind}`} flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
+          <Text dimColor>{label}</Text>
+          {visible.map(f => (
+            <Button
+              key={`pill-${kind}:${f.name}`}
+              label={`${prefix}${f.name} ${f.count}`}
+              {...(chosen.includes(f.name.toLowerCase()) ? { variant: 'primary' as const } : { dimColor: true })}
+              onPress={() => toggle(f.name)}
+            />
+          ))}
+          {list.length > PILLS && (
+            <Button key={`pills-more-${kind}`} label={t.allPills ? 'Fewer' : `+${list.length - visible.length} more`} dimColor onPress={() => patch({ allPills: !t.allPills })} />
+          )}
+        </Box>
+      )
+    }
+
     let body: ReturnType<typeof Text>
-    let caption = `${model.matched} task${model.matched === 1 ? '' : 's'}${model.shown < model.matched ? ` (first ${model.shown})` : ''}`
+    let caption = filtering
+      ? `${model.matched} of ${all.matched} tasks`
+      : `${model.matched} task${model.matched === 1 ? '' : 's'}${model.shown < model.matched ? ` (first ${model.shown})` : ''}`
     if (layout === 'board' || layout === 'list') {
       const columns = columnsOf(model, config, settings, vault.tasks, now, layout)
       body = layout === 'board'
@@ -486,13 +556,15 @@ export const register: Register = on => {
         </Box>
       )
     } else {
-      const graph = buildGraph(model.tasks, vault.tasks)
+      const graph = buildGraph(model.tasks, vault.tasks, { hideDone: !!t.hideDone })
+      const dots = graph.nodes.filter(n => n.task?.done && !n.missing).length
       const zoom = t.zoom > 0 ? t.zoom : 1
       const view = graph.nodes.length ? zoomView(graphSvg(graph, settings, t.orientation), zoom, t.pan) : undefined
       caption += ` · ${graph.edges.length} dependenc${graph.edges.length === 1 ? 'y' : 'ies'}` +
         (graph.criticalDays ? ` · critical path ${Math.round(graph.criticalDays * 10) / 10} days (red)` : '') +
         (graph.isolated ? ` · ${graph.isolated} without dependencies not drawn` : '') +
         (graph.cycles ? ` · ${graph.cycles} in a cycle` : '') +
+        (dots ? ` · ${dots} done shown as dots (hover for the card)` : '') +
         (view ? ` · ${t.orientation} · ${zoomLabel(zoom, view.from, view.to)}` : '')
       const panBy = (direction: 1 | -1) => patch({ pan: Math.min(1, Math.max(0, t.pan + direction * panStep(zoom))) })
       body = (
@@ -508,11 +580,13 @@ export const register: Register = on => {
             <Button key="zoom-in" label="+" onPress={() => patch({ zoom: stepZoom(zoom, 1) })} />
             {zoom > 1 && <Button key="pan-left" label="◀" onPress={() => panBy(-1)} />}
             {zoom > 1 && <Button key="pan-right" label="▶" onPress={() => panBy(1)} />}
+            {/* One press: finished tasks as dots, or not at all. */}
+            <Button key="done-toggle" label={t.hideDone ? 'Show done' : 'Hide done'} onPress={() => patch({ hideDone: !t.hideDone })} />
           </Box>
           {!view && <Text dimColor italic>No task in this view has a blockedBy dependency.</Text>}
           {view && (view.svg.length > SVG_LIMIT
             ? <Text>The graph is too large for the pane ({view.svg.length.toLocaleString('en')} characters); pick a narrower view.</Text>
-            : <Svg source={view.svg} alt={`Dependency graph of ${model.view.name}: ${graph.nodes.length} tasks, ${graph.edges.length} dependencies`} />)}
+            : <Svg source={view.svg} isInteractive alt={`Dependency graph of ${model.view.name}: ${graph.nodes.length} tasks, ${graph.edges.length} dependencies`} />)}
         </Box>
       )
     }
@@ -548,6 +622,9 @@ export const register: Register = on => {
         <Text dimColor>
           Filters run over the {vault.files.length.toLocaleString('en')} notes in {settings.tasksFolder} and {settings.archiveFolder}, not the whole vault.
         </Text>
+        {pillRow('project', 'Projects', facetsOf.projects, filters.projects, '')}
+        {pillRow('context', 'Contexts', facetsOf.contexts, filters.contexts, '@')}
+        {filtering && <Button key="pills-clear" label="Clear filters" dimColor onPress={() => patch({ projects: [], contexts: [] })} />}
         {model.warnings.length > 0 && (
           <Text dimColor italic>
             Note: skipped what this renderer cannot read ({model.warnings.length}): {model.warnings.slice(0, 3).join('; ')}{model.warnings.length > 3 ? '; …' : ''}

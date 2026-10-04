@@ -91,6 +91,8 @@ status: open
 priority: normal
 scheduled: '${day(5)}'
 size: L
+contexts:
+  - docs
 blockedBy:
   - uid: "[[Build API]]"
     reltype: FINISHTOSTART
@@ -103,6 +105,8 @@ status: next
 priority: high
 due: ${day(-1)} 09:00:00+02:00
 size: XL
+projects: ['[[Platform]]']
+contexts: [release]
 blockedBy:
 - '[[Write docs]]'
 - '[[Build API]]'

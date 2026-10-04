@@ -15,6 +15,13 @@ export type TasksTarget = {
   layout?: Layout
   /** Groups shown in full instead of their first cards, as `<layout>:<group key>`. */
   expanded: string[]
+  /** Pill filters on top of the view: a task in any selected project, AND any selected context. */
+  projects?: string[]
+  contexts?: string[]
+  /** Every pill shown, instead of the most used ones. */
+  allPills?: boolean
+  /** Dependency graph: leave finished tasks out (else they are drawn as dots). */
+  hideDone?: boolean
   /** Dependency graph only. */
   orientation: 'landscape' | 'portrait'
   zoom: number

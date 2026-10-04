@@ -185,3 +185,43 @@ test('outside a vault an alias explains itself; the terminal gets a text account
   expect(await term.find({ type: 'Text', text: /Kanban Board \(tasknotesKanban\): 6 tasks/ })).toBeDefined()
   await term.unmount()
 })
+
+test('pills narrow every layout; a second press and Clear filters undo it', async ($, on) => {
+  serveVault(on)
+  await $.command.run({ command: 'taskboard', args: 'kanban' })
+  const ui = await mount($)
+  const caption = async () => (await ui.find({ type: 'Text', text: /^Kanban Board · / }))?.text ?? ''
+  expect((await ui.find({ key: 'pill-project:Platform' }))?.props.label).toBe('Platform 2')
+  expect((await ui.find({ key: 'pill-context:docs' }))?.props.label).toBe('@docs 1')
+  await ui.press({ key: 'pill-project:Platform' })
+  expect(await caption()).toContain('2 of 6 tasks')
+  expect((await ui.find({ key: 'pill-project:Platform' }))?.props.variant).toBe('primary')
+  expect(await ui.find({ type: 'Text', text: 'Pay invoice' })).toBeUndefined()
+  await ui.press({ key: 'layout-agenda' }) // the filter holds across layouts
+  expect(await ui.find({ type: 'Text', text: 'Pay invoice' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Build API' })).toBeDefined()
+  await ui.press({ key: 'pill-context:docs' }) // both rows must hold: Platform AND @docs
+  expect(await caption()).toContain('0 of 6 tasks')
+  await ui.press({ key: 'pills-clear' })
+  expect(await caption()).toContain('6 tasks')
+  expect(await ui.find({ key: 'pills-clear' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('graph: interactive SVG, done tasks as dots, one press hides them; filters from the tool', async ($, on) => {
+  serveVault(on)
+  const ran = await $.tool.call({ tool: 'mcp__tasknotes-preview__open', base: 'kanban', layout: 'graph', project: 'Platform' })
+  expect(String(ran.result)).toContain('filtered to project Platform: 2 of 6 tasks')
+  const ui = await mount($)
+  const svg = async () => await ui.find({ type: 'Svg' })
+  expect((await svg())?.props.isInteractive).toBe(true)
+  expect(String((await svg())?.props.source)).toContain('<title>Design schema · Done</title>')
+  expect((await ui.find({ type: 'Text', text: /done shown as dots/ }))?.text).toContain('1 done shown as dots')
+  expect((await ui.find({ key: 'done-toggle' }))?.props.label).toBe('Hide done')
+  await ui.press({ key: 'done-toggle' })
+  expect(String((await svg())?.props.source)).not.toContain('Design schema')
+  expect((await ui.find({ key: 'done-toggle' }))?.props.label).toBe('Show done')
+  await ui.unmount()
+  const flags = await $.command.run({ command: 'taskboard', args: 'kanban --context=docs,release --list' })
+  expect(flags.text).toContain('filtered to context @docs, context @release: 2 of 6 tasks')
+})

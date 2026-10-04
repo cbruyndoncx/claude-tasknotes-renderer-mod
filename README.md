@@ -14,7 +14,7 @@ tasks the same view shows in Obsidian, without Obsidian running.
 | **Board** | `tasknotesKanban` views | Columns by the view's `groupBy` (default: status). Status columns follow TaskNotes' order and colours; empty ones stay unless the view hides them. |
 | **List** | `tasknotesTaskList`, `table` and other views | Sections by `groupBy`, rows in the view's sort order. Table views also show their formula columns. |
 | **Agenda** | `tasknotesCalendar` and `tasknotesMiniCalendar` views | Overdue tasks first, then the next 7 days (`listDayCount`) by due and scheduled date. Recurring tasks are expanded from their rule, minus completed instances. |
-| **Graph** | any view, on request | `blockedBy` arrows laid out in layers. The critical path is the longest chain of unfinished work, by `timeEstimate` or else `size`, drawn in red. Blockers and dependents outside the view are drawn dashed; broken links and cycles are flagged. |
+| **Graph** | any view, on request | `blockedBy` arrows laid out in layers. The critical path is the longest chain of unfinished work, by `timeEstimate` or else `size`, drawn in red. Blockers and dependents outside the view are drawn dashed; broken links and cycles are flagged. Finished tasks shrink to a dot; hover it for the card, or hide them with one press. |
 
 Every card shows the properties the view's `order` lists that TaskNotes knows how to show:
 status, priority, due (red when overdue), scheduled, projects, contexts, a "blocked by N"
@@ -32,15 +32,18 @@ The command is `/taskboard`: `/tasks` is Claude Code's own background-tasks comm
 - `/taskboard`: the file TaskNotes opens for its tasks view.
 - `/taskboard kanban` (or `tasks`, `agenda`, `calendar`, `mini-calendar`, `relationships`): the
   `.base` file TaskNotes opens for that command (its `commandFileMapping` setting).
-- `/taskboard <file.base> [view name or number] [--board|--list|--agenda|--graph]`
+- `/taskboard <file.base> [view name or number] [--board|--list|--agenda|--graph] [--project=A,B] [--context=X]`
 - Or just ask Claude ("show my overdue tasks", "show the dependency graph of the kanban").
-  The mod registers the model tool `mcp__tasknotes-preview__open` with `base`, `view` and
-  `layout`. Its answer includes counts per column, so Claude knows what you are looking at.
+  The mod registers the model tool `mcp__tasknotes-preview__open` with `base`, `view`,
+  `layout`, `project` and `context`. Its answer includes counts per column, so Claude knows what you are looking at.
 
 The toolbar has a view picker, the four layouts (one press each), Refresh and **Open in
-Obsidian**. The graph adds the same controls as
+Obsidian**. Under it, **pills** for the projects and contexts of the view's tasks (most used
+first) narrow every layout. Pills in one row widen each other (any of them), and the two rows
+narrow each other (both must hold). **Clear filters** resets them. The graph adds the same controls as
 [claude-diagrams-renderer-mod](https://github.com/cbruyndoncx/claude-diagrams-renderer-mod):
-a one-press landscape/portrait switch and zoom (− · Fit · +) with ◀ ▶ pan.
+a one-press landscape/portrait switch and zoom (− · Fit · +) with ◀ ▶ pan, plus **Hide done /
+Show done**.
 
 ## Install
 
@@ -101,7 +104,7 @@ claude plugin test .
 - `hooks/bases.ts`: `.base` files: views, filters, sort, groups.
 - `hooks/tasknotes.ts`: TaskNotes settings and the task model.
 - `hooks/model.ts`, `hooks/agenda.ts`, `hooks/graph.ts`: what each layout shows.
-- `tests/`: 23 tests run by `claude plugin test`. There is no real filesystem; the tests' hooks
+- `tests/`: 27 tests run by `claude plugin test`. There is no real filesystem; the tests' hooks
   serve a small vault.
 
 The engine only follows `$` (the engine interface) inside the hooks module itself, so

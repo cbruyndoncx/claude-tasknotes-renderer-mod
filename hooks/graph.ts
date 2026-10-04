@@ -35,8 +35,15 @@ export type Graph = {
   cycles: number
 }
 
-export function buildGraph(viewTasks: Task[], allTasks: Task[]): Graph {
+export type GraphOptions = {
+  /** Leave finished tasks out altogether (their arrows go with them). */
+  hideDone?: boolean
+}
+
+export function buildGraph(allViewTasks: Task[], allTasks: Task[], opts: GraphOptions = {}): Graph {
   const index = taskIndex(allTasks)
+  const shown = (t: Task | undefined) => !(opts.hideDone && t?.done)
+  const viewTasks = allViewTasks.filter(shown)
   const nodes = new Map<string, GraphNode>()
   const edges: GraphEdge[] = []
   const viewKeys = new Set(viewTasks.map(t => linkKey(t.file)))
@@ -56,6 +63,7 @@ export function buildGraph(viewTasks: Task[], allTasks: Task[]): Graph {
     const key = linkKey(task.file)
     for (const target of task.blockedBy) {
       const blocker = findTask(index, target)
+      if (!shown(blocker)) continue
       const bkey = blocker ? linkKey(blocker.file) : `missing:${linkKey(target)}`
       node(key, task, task.title)
       node(bkey, blocker, blocker ? blocker.title : target)
@@ -65,7 +73,7 @@ export function buildGraph(viewTasks: Task[], allTasks: Task[]): Graph {
   // Dependents outside the view, one hop, as context.
   for (const task of allTasks) {
     const key = linkKey(task.file)
-    if (viewKeys.has(key)) continue
+    if (viewKeys.has(key) || !shown(task)) continue
     for (const target of task.blockedBy) {
       const blocker = findTask(index, target)
       if (blocker && viewKeys.has(linkKey(blocker.file))) {
@@ -172,21 +180,74 @@ const H = 66
 const FONT = 12
 const CRITICAL = '#d62728'
 
+/** A finished task is a dot; open work, blockers outside the view and broken links are cards. */
+const DOT = 16
+
+function isDot(n: GraphNode): boolean {
+  return !!n.task?.done && !n.missing
+}
+
+function cardMarkup(n: GraphNode, x: number, y: number, settings: TaskNotesSettings): string[] {
+  const parts: string[] = []
+  const status = n.task?.status ?? ''
+  const color = n.missing ? CRITICAL : settings.statuses.find(s => s.value.toLowerCase() === status.toLowerCase())?.color ?? '#808080'
+  const done = !!n.task?.done
+  const stroke = n.critical ? CRITICAL : n.missing ? CRITICAL : n.inView ? '#b8b8b8' : '#c8c8c8'
+  const dash = n.inView && !n.missing ? '' : ' stroke-dasharray="5 4"'
+  parts.push(`<rect x="${x}" y="${y}" width="${W}" height="${H}" rx="7" fill="${n.inView ? '#ffffff' : '#f6f6f6'}" stroke="${stroke}" stroke-width="${n.critical ? 2.5 : 1.2}"${dash}/>`)
+  parts.push(`<rect x="${x}" y="${y}" width="6" height="${H}" rx="3" fill="${esc(color)}"/>`)
+  const maxChars = Math.floor((W - 22) / (FONT * CHAR_WIDTH))
+  const lines = wrapLines(n.missing ? `not found: ${n.title}` : n.title, maxChars)
+  const shown = lines.slice(0, 2)
+  if (lines.length > 2) shown[1] = `${(shown[1] ?? '').slice(0, Math.max(0, maxChars - 1))}…`
+  shown.forEach((line, i) => {
+    parts.push(`<text x="${x + 14}" y="${y + 19 + i * 15}" font-size="${FONT}" fill="#1f1f1f"${done ? ' text-decoration="line-through"' : ''}>${esc(line)}</text>`)
+  })
+  const meta = n.missing
+    ? 'blockedBy link with no task'
+    : [n.task?.statusDef?.label ?? status, n.task?.size, n.task && !done ? `${Math.round(n.days * 10) / 10}d` : '', n.inView ? '' : 'outside view', n.cycle ? 'in a cycle' : '']
+        .filter(Boolean)
+        .join(' · ')
+  parts.push(`<text x="${x + 14}" y="${y + H - 10}" font-size="10" fill="${n.cycle ? CRITICAL : '#666666'}">${esc(meta)}</text>`)
+  return parts
+}
+
+/**
+ * The graph as SVG. Layers run left to right (landscape) or top to bottom (portrait); each
+ * layer is as deep as its biggest node, so a layer of finished dots takes little room.
+ * A dot shows its card while the pointer is on it (CSS :hover, so draw it with the Svg
+ * element's isInteractive) and its title as a tooltip.
+ */
 export function graphSvg(graph: Graph, settings: TaskNotesSettings, orientation: Orientation): string {
   const landscape = orientation === 'landscape'
   const pad = 20
-  const along = landscape ? W + 80 : H + 56 // distance between layers
-  const across = landscape ? H + 22 : W + 22 // distance between siblings
-  const pos = new Map<string, { x: number; y: number }>()
-  for (const n of graph.nodes) {
-    const a = n.level * along
-    const b = n.order * across
-    pos.set(n.key, landscape ? { x: pad + a, y: pad + b } : { x: pad + b, y: pad + a })
+  const size = (n: GraphNode) => (isDot(n) ? { w: DOT, h: DOT } : { w: W, h: H })
+  const layerGap = landscape ? 80 : 56
+  const siblingGap = (a: GraphNode, b: GraphNode) => (isDot(a) && isDot(b) ? 10 : 22)
+
+  const levels = [...new Set(graph.nodes.map(n => n.level))].sort((a, b) => a - b)
+  const pos = new Map<string, { x: number; y: number; w: number; h: number }>()
+  let along = pad
+  for (const lv of levels) {
+    const layer = graph.nodes.filter(n => n.level === lv).sort((a, b) => a.order - b.order)
+    const depth = Math.max(...layer.map(n => (landscape ? size(n).w : size(n).h)))
+    let across = pad
+    layer.forEach((n, i) => {
+      const s = size(n)
+      if (i > 0) across += siblingGap(layer[i - 1] as GraphNode, n)
+      // Centre a dot in its layer's depth, so arrows into it stay level.
+      const offset = (depth - (landscape ? s.w : s.h)) / 2
+      pos.set(n.key, landscape ? { x: along + offset, y: across, ...s } : { x: across, y: along + offset, ...s })
+      across += landscape ? s.h : s.w
+    })
+    along += depth + layerGap
   }
-  const width = Math.max(W, ...[...pos.values()].map(p => p.x + W)) + pad
-  const height = Math.max(H, ...[...pos.values()].map(p => p.y + H)) + pad
+  const extent = [...pos.values()]
+  const width = Math.max(W + 2 * pad, ...extent.map(p => p.x + p.w + pad))
+  const height = Math.max(H + 2 * pad, ...extent.map(p => p.y + p.h + pad))
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="Segoe UI, Helvetica, Arial, sans-serif">`,
+    '<style>.dot .card{visibility:hidden}.dot:hover .card{visibility:visible}</style>',
     '<defs>',
     '<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888"/></marker>',
     `<marker id="arrow-critical" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${CRITICAL}"/></marker>`,
@@ -199,41 +260,39 @@ export function graphSvg(graph: Graph, settings: TaskNotesSettings, orientation:
     const to = pos.get(e.to)
     if (!from || !to) continue
     const [x1, y1, x2, y2] = landscape
-      ? [from.x + W, from.y + H / 2, to.x, to.y + H / 2]
-      : [from.x + W / 2, from.y + H, to.x + W / 2, to.y]
+      ? [from.x + from.w, from.y + from.h / 2, to.x, to.y + to.h / 2]
+      : [from.x + from.w / 2, from.y + from.h, to.x + to.w / 2, to.y]
     const bend = landscape ? Math.max(30, (x2 - x1) / 2) : Math.max(24, (y2 - y1) / 2)
     const d = landscape
       ? `M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}`
       : `M${x1},${y1} C${x1},${y1 + bend} ${x2},${y2 - bend} ${x2},${y2}`
-    const color = e.critical ? CRITICAL : '#9a9a9a'
+    const fromDone = graph.nodes.find(n => n.key === e.from)?.task?.done
+    const color = e.critical ? CRITICAL : fromDone ? '#c4c4c4' : '#9a9a9a'
     parts.push(`<path d="${d}" fill="none" stroke="${color}" stroke-width="${e.critical ? 2.5 : 1.4}" marker-end="url(#${e.critical ? 'arrow-critical' : 'arrow'})"/>`)
   }
-  const maxChars = Math.floor((W - 22) / (FONT * CHAR_WIDTH))
-  for (const n of graph.nodes) {
+  for (const n of graph.nodes.filter(m => !isDot(m))) {
+    const p = pos.get(n.key)
+    if (p) parts.push('<g>', ...cardMarkup(n, p.x, p.y, settings), '</g>')
+  }
+  // Dots last, so a card shown on hover lies over everything else.
+  for (const n of graph.nodes.filter(isDot)) {
     const p = pos.get(n.key)
     if (!p) continue
-    const status = n.task?.status ?? ''
-    const color = n.missing ? '#d62728' : settings.statuses.find(s => s.value.toLowerCase() === status.toLowerCase())?.color ?? '#808080'
-    const done = !!n.task?.done
-    const stroke = n.critical ? CRITICAL : n.missing ? '#d62728' : n.inView ? '#b8b8b8' : '#c8c8c8'
-    const dash = n.inView && !n.missing ? '' : ' stroke-dasharray="5 4"'
-    parts.push(`<g${done ? ' opacity="0.55"' : ''}>`)
-    parts.push(`<rect x="${p.x}" y="${p.y}" width="${W}" height="${H}" rx="7" fill="${n.inView ? '#ffffff' : '#f6f6f6'}" stroke="${stroke}" stroke-width="${n.critical ? 2.5 : 1.2}"${dash}/>`)
-    parts.push(`<rect x="${p.x}" y="${p.y}" width="6" height="${H}" rx="3" fill="${esc(color)}"/>`)
-    const title = n.missing ? `not found: ${n.title}` : n.title
-    const lines = wrapLines(title, maxChars)
-    const shown = lines.slice(0, 2)
-    if (lines.length > 2) shown[1] = `${(shown[1] ?? '').slice(0, Math.max(0, maxChars - 1))}…`
-    shown.forEach((line, i) => {
-      parts.push(`<text x="${p.x + 14}" y="${p.y + 19 + i * 15}" font-size="${FONT}" fill="#1f1f1f"${done ? ' text-decoration="line-through"' : ''}>${esc(line)}</text>`)
-    })
-    const meta = n.missing
-      ? 'blockedBy link with no task'
-      : [n.task?.statusDef?.label ?? status, n.task?.size, n.task && !done ? `${Math.round(n.days * 10) / 10}d` : '', n.inView ? '' : 'outside view', n.cycle ? 'in a cycle' : '']
-          .filter(Boolean)
-          .join(' · ')
-    parts.push(`<text x="${p.x + 14}" y="${p.y + H - 10}" font-size="10" fill="${n.cycle ? CRITICAL : '#666666'}">${esc(meta)}</text>`)
-    parts.push('</g>')
+    const color = n.task?.statusDef?.color ?? '#00aa00'
+    const cx = p.x + DOT / 2
+    const cy = p.y + DOT / 2
+    const cardX = Math.max(4, Math.min(cx + 12, width - W - 4))
+    const cardY = Math.max(4, Math.min(cy + 12, height - H - 4))
+    parts.push(
+      '<g class="dot">',
+      `<title>${esc(`${n.title} · ${n.task?.statusDef?.label ?? n.task?.status ?? 'done'}`)}</title>`,
+      `<circle cx="${cx}" cy="${cy}" r="12" fill="#ffffff" fill-opacity="0"/>`,
+      `<circle cx="${cx}" cy="${cy}" r="${DOT / 2 - 1}" fill="${esc(color)}" stroke="#ffffff" stroke-width="2"/>`,
+      `<g class="card">`,
+      ...cardMarkup(n, cardX, cardY, settings),
+      '</g>',
+      '</g>',
+    )
   }
   parts.push('</svg>')
   return parts.join('')

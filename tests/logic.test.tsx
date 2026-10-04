@@ -4,7 +4,7 @@ import { buildAgenda, occursOn, parseRecurrence } from '../hooks/agenda'
 import { evaluateView, parseBase } from '../hooks/bases'
 import { DateV, Evaluator, FileV, Unsupported, formatDate, linkKey, toDate, toDuration } from '../hooks/expr'
 import { buildGraph, graphSvg } from '../hooks/graph'
-import { columnsOf, buildModel } from '../hooks/model'
+import { columnsOf, buildModel, facets, narrow } from '../hooks/model'
 import { blockerTargets, parseSettings, sectionProgress, toTask } from '../hooks/tasknotes'
 import { parseYaml, splitFrontmatter } from '../hooks/yaml'
 import { AGENDA_BASE, KANBAN_BASE, SETTINGS, TASKS, TASKS_BASE, day } from './fixtures'
@@ -229,4 +229,31 @@ test('graph: a missing blocker and a cycle are drawn and flagged', async () => {
   expect(graph.cycles).toBe(2)
   expect(graph.nodes.find(n => n.missing)?.title).toBe('Ghost')
   expect(graphSvg(graph, settings, 'landscape')).toContain('not found: Ghost')
+})
+
+test('graph: finished tasks are dots with a hover card; hideDone leaves them out', async () => {
+  const config = parseBase(KANBAN_BASE)
+  const model = buildModel({ config, view: config.views[0]!, files, taskOf, ctx })
+  const svg = graphSvg(buildGraph(model.tasks, allTasks), settings, 'landscape')
+  expect(svg).toContain('.dot:hover .card{visibility:visible}')
+  expect(svg).toContain('<g class="dot"><title>Design schema · Done</title>')
+  expect((svg.match(/class="dot"/g) ?? []).length).toBe(1)
+  const hidden = buildGraph(model.tasks, allTasks, { hideDone: true })
+  expect(hidden.nodes.map(n => n.title).sort()).toEqual(['Build API', 'Launch', 'Write docs'])
+  expect(hidden.edges.length).toBe(3)
+  expect(hidden.criticalDays).toBe(14)
+  expect(graphSvg(hidden, settings, 'landscape')).not.toContain('Design schema')
+})
+
+test('pills: facets count projects and contexts; a row widens, two rows narrow', async () => {
+  const config = parseBase(KANBAN_BASE)
+  const model = buildModel({ config, view: config.views[0]!, files, taskOf, ctx })
+  const f = facets(model.tasks)
+  expect(f.projects).toEqual([{ name: 'Platform', count: 2 }])
+  expect(f.contexts).toEqual([{ name: 'docs', count: 1 }, { name: 'release', count: 1 }])
+  const titles = (m: typeof model) => m.tasks.map(t => t.title).sort()
+  expect(titles(narrow(model, { projects: ['platform'], contexts: [] }))).toEqual(['Build API', 'Launch'])
+  expect(titles(narrow(model, { projects: [], contexts: ['docs', 'release'] }))).toEqual(['Launch', 'Write docs'])
+  expect(titles(narrow(model, { projects: ['Platform'], contexts: ['docs'] }))).toEqual([])
+  expect(narrow(model, { projects: [], contexts: [] })).toBe(model)
 })

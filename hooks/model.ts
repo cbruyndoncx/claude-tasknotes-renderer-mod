@@ -35,6 +35,48 @@ export type Model = {
   tasks: Task[]
 }
 
+// ── pill filters ─────────────────────────────────────────────────────────
+
+export type Filters = { projects: string[]; contexts: string[] }
+export type Facet = { name: string; count: number }
+
+const lower = (s: string) => s.toLowerCase()
+
+/**
+ * The view narrowed by the pills: a task stays when it is in one of the selected projects
+ * (if any are selected) and has one of the selected contexts (if any are selected).
+ */
+export function narrow(model: Model, filters: Filters): Model {
+  const projects = filters.projects.map(lower)
+  const contexts = filters.contexts.map(lower)
+  if (!projects.length && !contexts.length) return model
+  const keep = model.tasks.map(t =>
+    (!projects.length || t.projects.some(p => projects.includes(lower(p)))) &&
+    (!contexts.length || t.contexts.some(c => contexts.includes(lower(c.replace(/^@/, ''))))),
+  )
+  const rows = model.rows.filter((_, k) => keep[k])
+  return { ...model, rows, tasks: model.tasks.filter((_, k) => keep[k]), matched: rows.length, shown: rows.length }
+}
+
+/** The projects and contexts of a view's tasks, most used first: what the pills offer. */
+export function facets(tasks: Task[]): { projects: Facet[]; contexts: Facet[] } {
+  const count = (names: string[][]) => {
+    const seen = new Map<string, Facet>()
+    for (const list of names) {
+      for (const name of new Set(list)) {
+        const f = seen.get(lower(name))
+        if (f) f.count++
+        else seen.set(lower(name), { name, count: 1 })
+      }
+    }
+    return [...seen.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  }
+  return {
+    projects: count(tasks.map(t => t.projects)),
+    contexts: count(tasks.map(t => t.contexts.map(c => c.replace(/^@/, '')))),
+  }
+}
+
 export function naturalLayout(type: string): Exclude<Layout, 'graph'> {
   const t = type.toLowerCase()
   if (t.includes('kanban') || t === 'board') return 'board'
