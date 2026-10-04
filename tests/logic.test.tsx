@@ -4,8 +4,8 @@ import { buildAgenda, occursOn, parseRecurrence } from '../hooks/agenda'
 import { evaluateView, parseBase } from '../hooks/bases'
 import { DateV, Evaluator, FileV, Unsupported, formatDate, linkKey, toDate, toDuration } from '../hooks/expr'
 import { buildGraph, graphSvg } from '../hooks/graph'
-import { columnsOf, buildModel, facets, narrow } from '../hooks/model'
-import { blockerTargets, parseSettings, sectionProgress, toTask } from '../hooks/tasknotes'
+import { columnsOf, buildModel, detailOf, facets, narrow } from '../hooks/model'
+import { blockerTargets, parseSettings, sectionProgress, taskIndex, toTask } from '../hooks/tasknotes'
 import { parseYaml, splitFrontmatter } from '../hooks/yaml'
 import { AGENDA_BASE, KANBAN_BASE, SETTINGS, TASKS, TASKS_BASE, day } from './fixtures'
 
@@ -174,6 +174,14 @@ test('tasks: Done When progress, blockedBy targets, status from settings', async
   expect(allTasks.find(t => t.title === 'Design schema')?.done).toBe(true)
 })
 
+test('popup: every property of a task, one line each, and the note path last', async () => {
+  const build = allTasks.find(t => t.title === 'Build API')!
+  const lines = detailOf(build, taskIndex(allTasks), ctx.now).map(m => m.text)
+  expect(lines[0]).toBe('Status: In progress')
+  expect(lines).toContain('Done when: 2/3')
+  expect(lines[lines.length - 1]).toBe(build.file.path)
+})
+
 // ── agenda ───────────────────────────────────────────────────────────────
 
 test('recurrence: TaskNotes shorthand and RFC 5545 rules', async () => {
@@ -231,11 +239,11 @@ test('graph: a missing blocker and a cycle are drawn and flagged', async () => {
   expect(graphSvg(graph, settings, 'landscape')).toContain('not found: Ghost')
 })
 
-test('graph: finished tasks are dots with a hover card; hideDone leaves them out', async () => {
+test('graph: finished tasks are plain dots; hideDone leaves them out', async () => {
   const config = parseBase(KANBAN_BASE)
   const model = buildModel({ config, view: config.views[0]!, files, taskOf, ctx })
   const svg = graphSvg(buildGraph(model.tasks, allTasks), settings, 'landscape')
-  expect(svg).toContain('.dot:hover .card{visibility:visible}')
+  expect(svg).not.toContain('class="card"') // a picture: details live in the pane's task list
   expect(svg).toContain('<g class="dot"><title>Design schema · Done</title>')
   expect((svg.match(/class="dot"/g) ?? []).length).toBe(1)
   const hidden = buildGraph(model.tasks, allTasks, { hideDone: true })

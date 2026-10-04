@@ -14,12 +14,16 @@ tasks the same view shows in Obsidian, without Obsidian running.
 | **Board** | `tasknotesKanban` views | Columns by the view's `groupBy` (default: status). Status columns follow TaskNotes' order and colours; empty ones stay unless the view hides them. |
 | **List** | `tasknotesTaskList`, `table` and other views | Sections by `groupBy`, rows in the view's sort order. Table views also show their formula columns. |
 | **Agenda** | `tasknotesCalendar` and `tasknotesMiniCalendar` views | Overdue tasks first, then the next 7 days (`listDayCount`) by due and scheduled date. Recurring tasks are expanded from their rule, minus completed instances. |
-| **Graph** | any view, on request | `blockedBy` arrows laid out in layers. The critical path is the longest chain of unfinished work, by `timeEstimate` or else `size`, drawn in red. Blockers and dependents outside the view are drawn dashed; broken links and cycles are flagged. Finished tasks shrink to a dot; hover it for the card, or hide them with one press. |
+| **Graph** | any view, on request | `blockedBy` arrows laid out in layers. The critical path is the longest chain of unfinished work, by `timeEstimate` or else `size`, drawn in red. Blockers and dependents outside the view are drawn dashed; broken links and cycles are flagged. Finished tasks shrink to a dot, or hide them with one press. Under the graph its tasks are listed, critical path first, each with the hover details and ↗. |
 
 Every card shows the properties the view's `order` lists that TaskNotes knows how to show:
 status, priority, due (red when overdue), scheduled, projects, contexts, a "blocked by N"
 badge, recurrence, assignee and size. It also shows **Done When** checkbox progress when the
 note has that section. The ↗ button on a card opens the note in Obsidian.
+
+Hovering a card, an agenda row or a row of the graph's task list pops up every property of
+the task, with an **Open in Obsidian** button. The graph itself is a picture, which the pane
+draws without hover or presses.
 
 The pane is read-only: it never writes a task. Claude still edits tasks when you ask, and the
 pane redraws after every Write or Edit to a note, the base or TaskNotes' settings.
@@ -106,7 +110,7 @@ claude plugin test .
 - `hooks/bases.ts`: `.base` files: views, filters, sort, groups.
 - `hooks/tasknotes.ts`: TaskNotes settings and the task model.
 - `hooks/model.ts`, `hooks/agenda.ts`, `hooks/graph.ts`: what each layout shows.
-- `tests/`: 29 tests run by `claude plugin test`. There is no real filesystem; the tests' hooks
+- `tests/`: 32 tests run by `claude plugin test`. There is no real filesystem; the tests' hooks
   serve a small vault.
 
 Every hook has a 10-second budget of its own time, and a pane redraws on every press and

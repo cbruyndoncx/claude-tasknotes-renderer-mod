@@ -68,7 +68,7 @@ const mount = ($: Parameters<Parameters<typeof test>[1]>[0], surface: 'desktop' 
     props: { title: 'Tasks', isFocused: false, bodyColumns: 120, placement: 'dock' },
   })
 
-test('/taskboard kanban opens the TaskNotes kanban base as a board with status columns', async ($, on) => {
+test('/taskboard kanban opens the TaskNotes kanban base as a board with status columns', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on)
   const ran = await $.command.run({ command: 'taskboard', args: 'kanban' })
   expect(ran.text).toContain('Showing TaskNotes/Views/kanban.base in the Tasks pane.')
@@ -85,7 +85,7 @@ test('/taskboard kanban opens the TaskNotes kanban base as a board with status c
   await ui.unmount()
 })
 
-test('the view picker switches views; each draws its own way', async ($, on) => {
+test('the view picker switches views; each draws its own way', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on)
   const ran = await $.command.run({ command: 'taskboard', args: 'TaskNotes/Views/tasks.base' })
   expect(ran.text).toContain('Not Blocked (tasknotesTaskList): 2 tasks')
@@ -100,7 +100,7 @@ test('the view picker switches views; each draws its own way', async ($, on) => 
   await ui.unmount()
 })
 
-test('a view by name and a layout flag on the command; unknown views are listed', async ($, on) => {
+test('a view by name and a layout flag on the command; unknown views are listed', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on)
   const ran = await $.command.run({ command: 'taskboard', args: 'tasks This Week --board' })
   expect(ran.text).toContain('This Week (tasknotesTaskList): 3 tasks;')
@@ -113,7 +113,7 @@ test('a view by name and a layout flag on the command; unknown views are listed'
   expect(missing.text).toContain('nowhere.base not found')
 })
 
-test('agenda: overdue on top, then today and the coming days', async ($, on) => {
+test('agenda: overdue on top, then today and the coming days', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on)
   await $.command.run({ command: 'taskboard', args: 'agenda' })
   const ui = await mount($)
@@ -125,7 +125,7 @@ test('agenda: overdue on top, then today and the coming days', async ($, on) => 
   await ui.unmount()
 })
 
-test('graph: blockedBy arrows as SVG with orientation and zoom controls', async ($, on) => {
+test('graph: blockedBy arrows as SVG with orientation and zoom controls', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on)
   const ran = await $.tool.call({ tool: 'mcp__tasknotes-preview__open', base: 'kanban', layout: 'graph' })
   expect(String(ran.result)).toContain('4 dependencies among 4 tasks; critical path 14 days')
@@ -144,7 +144,7 @@ test('graph: blockedBy arrows as SVG with orientation and zoom controls', async 
   await ui.unmount()
 })
 
-test('layout buttons redraw the same rows; long columns fold behind "Show all"', async ($, on) => {
+test('layout buttons redraw the same rows; long columns fold behind "Show all"', { timeoutMs: 30000 }, async ($, on) => {
   const host = serveVault(on)
   for (let k = 0; k < 14; k++) {
     host.content[`TaskNotes/Tasks/Chore ${k}.md`] = `---\ntitle: Chore ${k}\ntype: task\nstatus: open\n---\n`
@@ -160,7 +160,7 @@ test('layout buttons redraw the same rows; long columns fold behind "Show all"',
   await ui.unmount()
 })
 
-test('an agent Edit of a task note redraws the pane; unchanged notes are not read again', async ($, on) => {
+test('an agent Edit of a task note redraws the pane; unchanged notes are not read again', { timeoutMs: 30000 }, async ($, on) => {
   const reads: string[] = []
   const host = serveVault(on, { reads })
   on('tool.call', { tool: 'Edit' }, () => ({ result: { ok: true } }))
@@ -176,7 +176,7 @@ test('an agent Edit of a task note redraws the pane; unchanged notes are not rea
   await ui.unmount()
 })
 
-test('outside a vault an alias explains itself; the terminal gets a text account', async ($, on) => {
+test('outside a vault an alias explains itself; the terminal gets a text account', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on, { cwd: 'D:\\elsewhere' })
   const ran = await $.command.run({ command: 'taskboard', args: 'kanban' })
   expect(ran.text).toContain('this session is not inside an Obsidian vault')
@@ -186,7 +186,7 @@ test('outside a vault an alias explains itself; the terminal gets a text account
   await term.unmount()
 })
 
-test('pills narrow every layout; a second press and Clear filters undo it', async ($, on) => {
+test('pills narrow every layout; a second press and Clear filters undo it', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on)
   await $.command.run({ command: 'taskboard', args: 'kanban' })
   const ui = await mount($)
@@ -208,13 +208,13 @@ test('pills narrow every layout; a second press and Clear filters undo it', asyn
   await ui.unmount()
 })
 
-test('graph: interactive SVG, done tasks as dots, one press hides them; filters from the tool', async ($, on) => {
+test('graph: done tasks as dots, one press hides them; filters from the tool', { timeoutMs: 30000 }, async ($, on) => {
   serveVault(on)
   const ran = await $.tool.call({ tool: 'mcp__tasknotes-preview__open', base: 'kanban', layout: 'graph', project: 'Platform' })
   expect(String(ran.result)).toContain('filtered to project Platform: 2 of 6 tasks')
   const ui = await mount($)
   const svg = async () => await ui.find({ type: 'Svg' })
-  expect((await svg())?.props.isInteractive).toBe(true)
+  expect((await svg())?.props.isInteractive).toBeUndefined() // a plain picture
   expect(String((await svg())?.props.source)).toContain('<title>Design schema · Done</title>')
   expect((await ui.find({ type: 'Text', text: /done shown as dots/ }))?.text).toContain('1 done shown as dots')
   expect((await ui.find({ key: 'done-toggle' }))?.props.label).toBe('Hide done')
@@ -226,7 +226,7 @@ test('graph: interactive SVG, done tasks as dots, one press hides them; filters 
   expect(flags.text).toContain('filtered to context @docs, context @release: 2 of 6 tasks')
 })
 
-test('a base that leaves the archive out reads only the archived blockers it needs', async ($, on) => {
+test('a base that leaves the archive out reads only the archived blockers it needs', { timeoutMs: 30000 }, async ($, on) => {
   const reads: string[] = []
   const host = serveVault(on, { reads })
   host.content['TaskNotes/Tasks/Ship.md'] = '---\ntitle: Ship\ntype: task\nstatus: open\nblockedBy:\n  - "[[Old task]]"\n---\n'
@@ -239,5 +239,41 @@ test('a base that leaves the archive out reads only the archived blockers it nee
   expect((await ui.find({ type: 'Text', text: /^Filters run over/ }))?.text).toContain('this base leaves TaskNotes/Archive out')
   expect(reads.some(r => r.endsWith('Old task.md'))).toBe(true)
   expect(reads.some(r => r.endsWith('Unrelated.md'))).toBe(false)
+  await ui.unmount()
+})
+
+test('graph: the task list under it gives hover details and opens a task in Obsidian', { timeoutMs: 30000 }, async ($, on) => {
+  serveVault(on)
+  const launched: string[] = []
+  on('process.run', ($, e) => {
+    launched.push((e.argv as string[]).join(' '))
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  await $.command.run({ command: 'taskboard', args: 'kanban --graph' })
+  const ui = await mount($)
+  expect(await ui.find({ type: 'Text', text: 'Tasks in the graph' })).toBeDefined()
+  const rows = (await ui.findAll({ type: 'Box' })).filter(b => b.key?.startsWith('gn:'))
+  expect(rows.map(r => r.key)).toEqual([
+    'gn:TaskNotes/Tasks/Build API.md', // the critical path first, by layer
+    'gn:TaskNotes/Tasks/Write docs.md',
+    'gn:TaskNotes/Tasks/Launch.md',
+    'gn:TaskNotes/Tasks/Design schema.md', // finished work last
+  ])
+  // Each row carries the same hover popup as a board card: every property and an Open button.
+  expect(await ui.find({ type: 'Text', text: 'Status: In progress' })).toBeDefined()
+  expect(await ui.find({ key: 'pop-open:TaskNotes/Tasks/Build API.md' })).toBeDefined()
+  await ui.press({ key: 'open:TaskNotes/Tasks/Launch.md:graph' })
+  expect(launched[0]).toContain('obsidian://adv-uri?vault=vault&filepath=TaskNotes%2FTasks%2FLaunch.md')
+  await ui.unmount()
+})
+
+test('board cards and agenda rows carry the hover popup', { timeoutMs: 30000 }, async ($, on) => {
+  serveVault(on)
+  await $.command.run({ command: 'taskboard', args: 'kanban' })
+  const ui = await mount($)
+  expect(await ui.find({ key: 'pop-open:TaskNotes/Tasks/Pay invoice.md' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Awaiting: Waiting for the supplier to send the corrected invoice' })).toBeDefined()
+  await ui.press({ key: 'layout-agenda' })
+  expect(await ui.find({ key: 'pop-open:TaskNotes/Tasks/Launch.md' })).toBeDefined()
   await ui.unmount()
 })

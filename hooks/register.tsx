@@ -27,9 +27,10 @@ import {
 import type { Target } from './common'
 import { FileV, linkKey, toDate } from './expr'
 import { buildGraph, graphSvg } from './graph'
-import { buildModel, columnsOf, facets, narrow } from './model'
+import type { GraphNode } from './graph'
+import { buildModel, columnsOf, detailOf, facets, narrow } from './model'
 import type { Card, Column, Facet, Filters, Model } from './model'
-import { VIEW_ALIASES, fieldKey, parseSettings, toTask } from './tasknotes'
+import { VIEW_ALIASES, fieldKey, parseSettings, taskIndex, toTask } from './tasknotes'
 import type { Task, TaskNotesSettings } from './tasknotes'
 import { splitFrontmatter } from './yaml'
 
@@ -515,8 +516,40 @@ export const register: Register = on => {
     const expand = (key: string) => patch({ expanded: [...t.expanded, `${layout}:${key}`] })
     const collapse = (key: string) => patch({ expanded: t.expanded.filter(k => k !== `${layout}:${key}`) })
 
+    // The popup a card or agenda row shows while the pointer is on it: every property of the
+    // task and an Open in Obsidian button. A hover reveal runs no hook, so it costs no redraw;
+    // it is drawn display:none, absolute (moves nothing) and lit by the keyed Box around it.
+    const taskIndexOf = memo(`${drawn.key}|index`, () => taskIndex(vault.tasks))
+    const taskByPath = memo(`${drawn.key}|byPath`, () => new Map(vault.tasks.map(task => [task.file.path, task])))
+    const popup = (path: string, place: { top: number; left: number }) => {
+      const task = taskByPath.get(path)
+      if (!task) return undefined
+      return (
+        <Box
+          position="absolute"
+          top={place.top}
+          left={place.left}
+          right={0}
+          display="none"
+          hover={{ display: 'flex' }}
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={task.statusDef?.color ?? 'gray'}
+          backgroundColor="#1e1e1e"
+          paddingX={1}
+        >
+          <Text bold color="white" wrap="wrap">{task.title}</Text>
+          {detailOf(task, taskIndexOf, now).map((m, k) => (
+            <Text key={`pop:${path}:${k}`} color={m.color ?? 'white'} {...(k === 0 || m.color ? {} : { dimColor: true })} wrap="wrap">{m.text}</Text>
+          ))}
+          {t.vault && <Button key={`pop-open:${path}`} label="Open in Obsidian" variant="primary" onPress={() => open(path)} />}
+        </Box>
+      )
+    }
+
     const cardView = (card: Card, compact: boolean) => (
       <Box key={`card:${card.key}`} flexDirection="column" borderStyle="round" borderColor={card.color ?? 'gray'} paddingX={1} marginBottom={compact ? 0 : 1}>
+        {popup(card.path, { top: 0, left: 0 })}
         <Box flexDirection="row" gap={1} alignItems="flex-start">
           <Text color={card.color ?? 'gray'}>●</Text>
           <Box flexGrow={1} flexShrink={1}>
@@ -560,6 +593,7 @@ export const register: Register = on => {
       const kind = item.kind === 'recurring' ? '↻' : item.kind === 'due' ? 'due' : 'sched'
       return (
         <Box key={`ag:${item.task.file.path}:${item.date}:${k}`} flexDirection="row" gap={1}>
+          {popup(item.task.file.path, { top: 1, left: 2 })}
           <Text color={status?.color ?? 'gray'}>●</Text>
           <Text {...(overdue ? { color: '#d62728' } : { dimColor: true })}>{overdue ? dayLabel(item.date, now) : kind}</Text>
           <Box flexGrow={1} flexShrink={1}>
@@ -646,9 +680,32 @@ export const register: Register = on => {
         (graph.criticalDays ? ` · critical path ${Math.round(graph.criticalDays * 10) / 10} days (red)` : '') +
         (graph.isolated ? ` · ${graph.isolated} without dependencies not drawn` : '') +
         (graph.cycles ? ` · ${graph.cycles} in a cycle` : '') +
-        (dots ? ` · ${dots} done shown as dots (hover for the card)` : '') +
+        (dots ? ` · ${dots} done shown as dots` : '') +
         (view ? ` · ${t.orientation} · ${zoomLabel(zoom, view.from, view.to)}` : '')
       const panBy = (direction: 1 | -1) => patch({ pan: Math.min(1, Math.max(0, t.pan + direction * panStep(zoom))) })
+      // The drawing is a picture: hover and presses happen on these rows instead, in the
+      // critical path's order, then open work before finished, then by layer.
+      const listed = graph.nodes
+        .filter(n => n.task)
+        .sort((a, b) => Number(b.critical) - Number(a.critical) || Number(!!a.task?.done) - Number(!!b.task?.done) || a.level - b.level || a.title.localeCompare(b.title))
+      const nodeRow = (n: GraphNode) => {
+        const task = n.task as Task
+        const path = task.file.path
+        const meta = [task.statusDef?.label ?? task.status, task.size, !task.done ? `${Math.round(n.days * 10) / 10}d` : '', n.inView ? '' : 'outside view', n.cycle ? 'in a cycle' : '']
+          .filter(Boolean)
+          .join(' · ')
+        return (
+          <Box key={`gn:${path}`} flexDirection="row" gap={1}>
+            {popup(path, { top: 1, left: 2 })}
+            <Text color={n.critical ? '#d62728' : task.statusDef?.color ?? 'gray'}>{n.critical ? '◆' : '●'}</Text>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="wrap" strikethrough={task.done} dimColor={task.done}>{task.title}</Text>
+            </Box>
+            <Text dimColor>{meta}</Text>
+            <Button key={`open:${path}:graph`} label="↗" plain dimColor onPress={() => open(path)} />
+          </Box>
+        )
+      }
       body = (
         <Box flexDirection="column" gap={1}>
           <Box flexDirection="row" gap={2} flexWrap="wrap" alignItems="center">
@@ -668,7 +725,17 @@ export const register: Register = on => {
           {!view && <Text dimColor italic>No task in this view has a blockedBy dependency.</Text>}
           {view && (view.svg.length > SVG_LIMIT
             ? <Text>The graph is too large for the pane ({view.svg.length.toLocaleString('en')} characters); pick a narrower view.</Text>
-            : <Svg source={view.svg} isInteractive alt={`Dependency graph of ${model.view.name}: ${graph.nodes.length} tasks, ${graph.edges.length} dependencies`} />)}
+            : <Svg source={view.svg} alt={`Dependency graph of ${model.view.name}: ${graph.nodes.length} tasks, ${graph.edges.length} dependencies`} />)}
+          {listed.length > 0 && (
+            <Box key="graph-nodes" flexDirection="column">
+              <Box flexDirection="row" gap={1}>
+                <Text bold>Tasks in the graph</Text>
+                <Text dimColor>{listed.length} · critical path first · hover a row for details</Text>
+              </Box>
+              {(isExpanded('graph-nodes') ? listed : listed.slice(0, CAP)).map(nodeRow)}
+              {more('graph-nodes', listed.length)}
+            </Box>
+          )}
         </Box>
       )
     }

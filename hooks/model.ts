@@ -176,6 +176,37 @@ export function cardOf(
   return card
 }
 
+/**
+ * Everything a task has, one line each, whatever the view lists: what the hover popup of a
+ * card shows. Properties a task lacks leave no line.
+ */
+export function detailOf(task: Task, index: Map<string, Task>, now: number): MetaItem[] {
+  const out: MetaItem[] = []
+  const today = startOfDay(now)
+  out.push({ text: `Status: ${task.statusDef?.label ?? task.status}`, ...(task.statusDef ? { color: task.statusDef.color } : {}) })
+  if (task.priority !== 'none') out.push({ text: `Priority: ${task.priorityDef?.label ?? task.priority}`, ...(task.priorityDef ? { color: task.priorityDef.color } : {}) })
+  if (task.due) {
+    const late = !task.done && startOfDay(task.due.ms) < today
+    out.push({ text: `Due: ${shortDate(task.due.ms, now)}${late ? ' (overdue)' : ''}`, ...(late ? { color: '#d62728' } : {}) })
+  }
+  if (task.scheduled) out.push({ text: `Scheduled: ${shortDate(task.scheduled.ms, now)}` })
+  if (task.completed) out.push({ text: `Completed: ${shortDate(task.completed.ms, now)}` })
+  if (task.recurrence) out.push({ text: `Repeats: ${recurrenceWord(task.recurrence)}` })
+  if (task.projects.length) out.push({ text: `Projects: ${task.projects.join(', ')}` })
+  if (task.contexts.length) out.push({ text: `Contexts: ${task.contexts.map(c => `@${c.replace(/^@/, '')}`).join(' ')}` })
+  if (task.assignee.length) out.push({ text: `Assignee: ${task.assignee.join(', ')}` })
+  if (task.size) out.push({ text: `Size: ${task.size}` })
+  if (task.estimateMinutes) out.push({ text: `Estimate: ${task.estimateMinutes} min` })
+  const open = task.blockedBy.filter(t => !findTask(index, t)?.done)
+  if (open.length) out.push({ text: `Blocked by: ${open.map(t => findTask(index, t)?.title ?? t).join(', ')}`, color: '#d62728' })
+  if (task.awaiting) out.push({ text: `Awaiting: ${task.awaiting}` })
+  if (task.doneWhen) out.push({ text: `Done when: ${task.doneWhen.done}/${task.doneWhen.total}`, ...(task.doneWhen.done === task.doneWhen.total ? { color: '#00aa00' } : {}) })
+  if (task.readyWhen) out.push({ text: `Ready when: ${task.readyWhen.done}/${task.readyWhen.total}` })
+  if (task.file.tags.length) out.push({ text: task.file.tags.map(t => (t.startsWith('#') ? t : `#${t}`)).join(' ') })
+  out.push({ text: task.file.path })
+  return out
+}
+
 /** Card properties when a view lists none: TaskNotes' usual ones. */
 const DEFAULT_ORDER = ['status', 'priority', 'due', 'scheduled', 'projects', 'contexts', 'blockedBy', 'recurrence']
 

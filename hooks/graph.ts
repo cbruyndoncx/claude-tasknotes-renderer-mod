@@ -215,8 +215,8 @@ function cardMarkup(n: GraphNode, x: number, y: number, settings: TaskNotesSetti
 /**
  * The graph as SVG. Layers run left to right (landscape) or top to bottom (portrait); each
  * layer is as deep as its biggest node, so a layer of finished dots takes little room.
- * A dot shows its card while the pointer is on it (CSS :hover, so draw it with the Svg
- * element's isInteractive) and its title as a tooltip.
+ * The pane draws it as a picture: a finished task is a plain dot (its title is in the
+ * task list the pane shows under the graph, where hover and presses work).
  */
 export function graphSvg(graph: Graph, settings: TaskNotesSettings, orientation: Orientation): string {
   const landscape = orientation === 'landscape'
@@ -247,7 +247,6 @@ export function graphSvg(graph: Graph, settings: TaskNotesSettings, orientation:
   const height = Math.max(H + 2 * pad, ...extent.map(p => p.y + p.h + pad))
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="Segoe UI, Helvetica, Arial, sans-serif">`,
-    '<style>.dot .card{visibility:hidden}.dot:hover .card{visibility:visible}</style>',
     '<defs>',
     '<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888"/></marker>',
     `<marker id="arrow-critical" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${CRITICAL}"/></marker>`,
@@ -274,23 +273,14 @@ export function graphSvg(graph: Graph, settings: TaskNotesSettings, orientation:
     const p = pos.get(n.key)
     if (p) parts.push('<g>', ...cardMarkup(n, p.x, p.y, settings), '</g>')
   }
-  // Dots last, so a card shown on hover lies over everything else.
   for (const n of graph.nodes.filter(isDot)) {
     const p = pos.get(n.key)
     if (!p) continue
     const color = n.task?.statusDef?.color ?? '#00aa00'
-    const cx = p.x + DOT / 2
-    const cy = p.y + DOT / 2
-    const cardX = Math.max(4, Math.min(cx + 12, width - W - 4))
-    const cardY = Math.max(4, Math.min(cy + 12, height - H - 4))
     parts.push(
       '<g class="dot">',
       `<title>${esc(`${n.title} · ${n.task?.statusDef?.label ?? n.task?.status ?? 'done'}`)}</title>`,
-      `<circle cx="${cx}" cy="${cy}" r="12" fill="#ffffff" fill-opacity="0"/>`,
-      `<circle cx="${cx}" cy="${cy}" r="${DOT / 2 - 1}" fill="${esc(color)}" stroke="#ffffff" stroke-width="2"/>`,
-      `<g class="card">`,
-      ...cardMarkup(n, cardX, cardY, settings),
-      '</g>',
+      `<circle cx="${p.x + DOT / 2}" cy="${p.y + DOT / 2}" r="${DOT / 2 - 1}" fill="${esc(color)}" stroke="#ffffff" stroke-width="2"/>`,
       '</g>',
     )
   }
