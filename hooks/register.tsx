@@ -42,7 +42,8 @@ const CAP = 12
 
 // ── the vault ────────────────────────────────────────────────────────────
 
-type Entry = { mtime: number; file: FileV; body: string }
+/** A parsed note and its task, made once per modification time (and TaskNotes settings). */
+type Entry = { mtime: number; settings: string; file: FileV; task: Task }
 
 /**
  * Parsed notes by absolute path and modification time. The first draw reads every task
@@ -52,7 +53,11 @@ type Entry = { mtime: number; file: FileV; body: string }
 const notes = new Map<string, Entry>()
 
 type Vault = {
+  /** Changes when any note, or TaskNotes' settings, changes. */
+  signature: string
   settings: TaskNotesSettings
+  /** False when the base's filters leave the archive out, so it was not read. */
+  archiveIncluded: boolean
   /** Every note in the TaskNotes tasks and archive folders: what base filters run over. */
   files: FileV[]
   /** The task notes among them (TaskNotes' own identification), for resolving links. */
@@ -94,15 +99,70 @@ function linksOf(text: string): string[] {
   return [...out]
 }
 
-async function loadVault($: EngineInterface, root: string): Promise<Vault> {
+type Listed = { real: string; mtime: number; size: number }
+
+/** Whether a base's global filters leave `folder` out (`!file.inFolder("<folder>")`). */
+function excludesFolder(config: BaseConfig, folder: string): boolean {
+  const norm = (f: string) => f.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase()
+  const leaves = typeof config.filters === 'string' ? [config.filters] : config.filters && 'and' in config.filters ? config.filters.and : []
+  return leaves.some(leaf => {
+    const m = typeof leaf === 'string' ? /^!\s*file\.inFolder\(\s*["']([^"']+)["']\s*\)\s*$/.exec(leaf.trim()) : null
+    return !!m && (norm(folder) === norm(m[1] ?? '') || norm(folder).startsWith(`${norm(m[1] ?? '')}/`))
+  })
+}
+
+/**
+ * The notes a base runs over: the TaskNotes tasks folder, and the archive unless the base's
+ * own filters leave it out (then only the archived notes an open task names as a blocker
+ * are read, so a finished blocker still shows as finished). Parsing every archived note
+ * would spend most of a redraw's 10-second budget on notes the view never shows.
+ */
+async function loadVault($: EngineInterface, root: string, config: BaseConfig): Promise<Vault> {
   const settingsText = await $.fs.read(joinPath(root, '.obsidian/plugins/tasknotes/data.json')).catch(() => undefined)
   const settings = parseSettings(settingsText)
-  const listed: { real: string; mtime: number; size: number }[] = []
-  for (const folder of [settings.tasksFolder, settings.archiveFolder]) {
-    const dir = joinPath(root, folder)
-    if (!listed.some(l => isInside(l.real, dir))) await listNotes($, dir, listed)
+  const tasksDir = joinPath(root, settings.tasksFolder)
+  const archiveDir = joinPath(root, settings.archiveFolder)
+  const main: Listed[] = []
+  const archived: Listed[] = []
+  await listNotes($, tasksDir, main)
+  if (!isInside(archiveDir, tasksDir)) await listNotes($, archiveDir, archived)
+  const archiveIncluded = !excludesFolder(config, settings.archiveFolder)
+  const settingsKey = String(hash(settingsText ?? ''))
+  const sig = (list: Listed[]) => `${list.length}|${list.reduce((h, l) => (Math.imul(h, 31) + l.mtime + l.real.length) | 0, 7)}`
+  const signature = `${root}|${settingsKey}|${archiveIncluded}|${sig(main)}|${sig(archived)}`
+  if (vaultCache?.signature === signature) return vaultCache.vault
+  const parse = (list: Listed[]) => parseNotes($, root, list, settings, settingsKey)
+  await parse(archiveIncluded ? [...main, ...archived] : main)
+  const inScope = (archiveIncluded ? [...main, ...archived] : main).map(l => notes.get(l.real)).filter((e): e is Entry => !!e)
+  let extra: Entry[] = []
+  if (!archiveIncluded) {
+    // Blockers that live in the archive: read just those.
+    const known = new Set(inScope.map(e => linkKey(e.file)))
+    const wanted = new Set(inScope.flatMap(e => e.task.blockedBy.map(linkKey)).filter(k => !known.has(k)))
+    const needed = archived.filter(l => wanted.has(linkKey(l.real.slice(l.real.lastIndexOf(sepOf(l.real)) + 1))))
+    await parse(needed)
+    extra = needed.map(l => notes.get(l.real)).filter((e): e is Entry => !!e)
   }
-  const stale = listed.filter(l => notes.get(l.real)?.mtime !== l.mtime)
+  const entries = [...inScope, ...extra]
+  const taskByFile = new Map(entries.map(e => [e.file, e.task]))
+  const taskOf = (file: FileV) => taskByFile.get(file) ?? toTask(file, '', settings)
+  const files = inScope.map(e => e.file)
+  const byKey = new Map<string, FileV>()
+  for (const f of entries.map(e => e.file)) {
+    byKey.set(f.path.replace(/\.md$/i, '').toLowerCase(), f)
+    if (!byKey.has(linkKey(f))) byKey.set(linkKey(f), f)
+  }
+  const resolve = (target: string) => byKey.get(target.replace(/\\/g, '/').replace(/\.md$/i, '').toLowerCase()) ?? byKey.get(linkKey(target))
+  const vault: Vault = { signature, settings, files, archiveIncluded, tasks: entries.map(e => e.task), taskOf, resolve }
+  vaultCache = { signature, vault }
+  return vault
+}
+
+async function parseNotes($: EngineInterface, root: string, list: Listed[], settings: TaskNotesSettings, settingsKey: string): Promise<void> {
+  const stale = list.filter(l => {
+    const e = notes.get(l.real)
+    return e?.mtime !== l.mtime || e.settings !== settingsKey
+  })
   for (let k = 0; k < stale.length; k += 32) {
     await Promise.all(stale.slice(k, k + 32).map(async l => {
       const text = await $.fs.read(l.real).catch(() => '')
@@ -110,28 +170,23 @@ async function loadVault($: EngineInterface, root: string): Promise<Vault> {
       const rel = l.real.slice(root.length + 1).split(sepOf(l.real)).join('/')
       const created = toDate(data[fieldKey(settings, 'dateCreated')])?.ms ?? l.mtime
       const file = new FileV(rel, data, l.mtime, created, l.size, tagsOf(data), linksOf(text))
-      notes.set(l.real, { mtime: l.mtime, file, body })
+      // The task (Done When progress needs the body) is made here, once; the body is not kept.
+      notes.set(l.real, { mtime: l.mtime, settings: settingsKey, file, task: toTask(file, body, settings) })
     }))
   }
-  const entries = listed.map(l => notes.get(l.real)).filter((e): e is Entry => !!e)
-  const byFile = new Map(entries.map(e => [e.file, e]))
-  const taskCache = new Map<FileV, Task>()
-  const taskOf = (file: FileV) => {
-    let t = taskCache.get(file)
-    if (!t) {
-      t = toTask(file, byFile.get(file)?.body ?? '', settings)
-      taskCache.set(file, t)
-    }
-    return t
-  }
-  const files = entries.map(e => e.file)
-  const byKey = new Map<string, FileV>()
-  for (const f of files) {
-    byKey.set(f.path.replace(/\.md$/i, '').toLowerCase(), f)
-    if (!byKey.has(linkKey(f))) byKey.set(linkKey(f), f)
-  }
-  const resolve = (target: string) => byKey.get(target.replace(/\\/g, '/').replace(/\.md$/i, '').toLowerCase()) ?? byKey.get(linkKey(target))
-  return { settings, files, tasks: files.map(taskOf), taskOf, resolve }
+}
+
+/**
+ * The vault as last built, by its notes' paths and modification times and TaskNotes'
+ * settings. A pane redraws on every press and resize, and every redraw has a 10-second
+ * budget of its own time: rebuilding the model of every note each time used most of it.
+ */
+let vaultCache: { signature: string; vault: Vault } | undefined
+
+function hash(text: string): number {
+  let h = 7
+  for (let k = 0; k < text.length; k++) h = (Math.imul(h, 31) + text.charCodeAt(k)) | 0
+  return h
 }
 
 // ── targets ──────────────────────────────────────────────────────────────
@@ -240,6 +295,8 @@ async function openInObsidian($: EngineInterface, target: Target): Promise<strin
 // ── evaluation ───────────────────────────────────────────────────────────
 
 type Drawn = {
+  /** Identifies the evaluation: base, view, notes, settings and day. */
+  key: string
   config: BaseConfig
   vault: Vault
   /** The whole view, as the base defines it. */
@@ -260,21 +317,43 @@ function filtersOf(t: TasksTarget): Filters {
  */
 const evaluations = new Map<string, Omit<Drawn, 'layout' | 'model'>>()
 
+/**
+ * What a layout made of an evaluation (board columns, the agenda, the graph and its SVG,
+ * pill counts), by the evaluation and what else it read. A press that changes none of it
+ * (zoom, pan, Fit, a resize) draws from here.
+ */
+const derived = new Map<string, unknown>()
+
+function memo<T>(key: string, make: () => T): T {
+  if (derived.has(key)) return derived.get(key) as T
+  if (derived.size > 32) derived.clear()
+  const value = make()
+  derived.set(key, value)
+  return value
+}
+
+function filterKey(t: TasksTarget): string {
+  const f = filtersOf(t)
+  return `${f.projects.join('\u0001')}|${f.contexts.join('\u0001')}`
+}
+
 async function evaluate($: EngineInterface, t: TasksTarget): Promise<Drawn> {
-  const [vault, source] = await Promise.all([loadVault($, t.root), $.fs.read(t.real)])
+  const source = await $.fs.read(t.real)
+  const parsedBase = parseBase(source)
+  const vault = await loadVault($, t.root, parsedBase)
   const now = Date.now()
-  const signature = vault.files.reduce((h, f) => (Math.imul(h, 31) + f.mtime + f.path.length) | 0, vault.files.length)
-  const key = `${t.real}|${t.view}|${source.length}|${Array.from(source).reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 7)}|${signature}|${Math.floor(now / 60000)}`
+  // today() moves once a day; that is the clock a view's filters read.
+  const key = `${t.real}|${t.view}|${hash(source)}|${vault.signature}|${new Date(now).toDateString()}`
   const cached = evaluations.get(key)
-  if (cached) return { ...cached, model: narrow(cached.all, filtersOf(t)), layout: t.layout ?? cached.all.natural }
-  const config = parseBase(source)
+  if (cached) return { ...cached, model: memo(`${key}|narrow|${filterKey(t)}`, () => narrow(cached.all, filtersOf(t))), layout: t.layout ?? cached.all.natural }
+  const config = parsedBase
   const view = config.views[Math.min(t.view, config.views.length - 1)] ?? config.views[0]
   if (!view) throw new Error('the base has no views')
   const thisFile = new FileV(t.rel, {}, now, now, source.length, [], [])
   const all = buildModel({ config, view, files: vault.files, taskOf: vault.taskOf, ctx: { now, thisFile, resolve: vault.resolve } })
   evaluations.clear()
-  evaluations.set(key, { config, vault, all, now })
-  return { config, vault, all, model: narrow(all, filtersOf(t)), layout: t.layout ?? all.natural, now }
+  evaluations.set(key, { key, config, vault, all, now })
+  return { key, config, vault, all, model: memo(`${key}|narrow|${filterKey(t)}`, () => narrow(all, filtersOf(t))), layout: t.layout ?? all.natural, now }
 }
 
 /** A short text account of what the pane shows: the model tool's answer and the terminal's pane. */
@@ -286,15 +365,17 @@ function summarize(d: Drawn, t: TasksTarget): string {
     ? `${model.view.name} (${model.view.type}), filtered to ${filter}: ${model.matched} of ${all.matched} tasks`
     : `${model.view.name} (${model.view.type}): ${model.matched} task${model.matched === 1 ? '' : 's'}`
   if (d.layout === 'agenda') {
-    const agenda = buildAgenda(model.tasks, now, Number(model.view.options.listDayCount) || 7)
+    const count = Number(model.view.options.listDayCount) || 7
+    const agenda = memo(`${d.key}|agenda|${filterKey(t)}|${count}`, () => buildAgenda(model.tasks, now, count))
     const days = agenda.days.filter(x => x.items.length).map(x => `${dayLabel(x.date, now)} ${x.items.length}`)
     return `${head}; overdue ${agenda.overdue.length}${days.length ? `; ${days.join(', ')}` : ''}`
   }
   if (d.layout === 'graph') {
-    const g = buildGraph(model.tasks, vault.tasks, { hideDone: !!t.hideDone })
+    const g = memo(`${d.key}|graph|${filterKey(t)}|${!!t.hideDone}`, () => buildGraph(model.tasks, vault.tasks, { hideDone: !!t.hideDone }))
     return `${head}; ${g.edges.length} dependencies among ${g.nodes.length} tasks; critical path ${Math.round(g.criticalDays * 10) / 10} days`
   }
-  const columns = columnsOf(model, config, vault.settings, vault.tasks, now, d.layout === 'board' ? 'board' : 'list')
+  const kind = d.layout === 'board' ? 'board' : 'list'
+  const columns = memo(`${d.key}|columns|${kind}|${filterKey(t)}`, () => columnsOf(model, config, vault.settings, vault.tasks, now, kind))
   if (columns.length === 1 && columns[0]?.key === 'all') return head
   return `${head}; ${columns.map(c => `${c.label} ${c.cards.length}`).join(', ')}`
 }
@@ -492,7 +573,7 @@ export const register: Register = on => {
 
     // Pills: the projects and contexts of the whole view, most used first. A press toggles one;
     // several in a row widen (any of them), the two rows narrow each other (both must hold).
-    const facetsOf = facets(all.tasks)
+    const facetsOf = memo(`${drawn.key}|facets`, () => facets(all.tasks))
     const PILLS = 10
     const pillRow = (kind: 'project' | 'context', label: string, list: Facet[], selected: string[], prefix: string) => {
       if (!list.length) return undefined
@@ -525,13 +606,13 @@ export const register: Register = on => {
       ? `${model.matched} of ${all.matched} tasks`
       : `${model.matched} task${model.matched === 1 ? '' : 's'}${model.shown < model.matched ? ` (first ${model.shown})` : ''}`
     if (layout === 'board' || layout === 'list') {
-      const columns = columnsOf(model, config, settings, vault.tasks, now, layout)
+      const columns = memo(`${drawn.key}|columns|${layout}|${filterKey(t)}`, () => columnsOf(model, config, settings, vault.tasks, now, layout))
       body = layout === 'board'
         ? <Box flexDirection="row" flexWrap="wrap" gap={2}>{columns.map(c => columnView(c, true))}</Box>
         : <Box flexDirection="column" gap={1}>{columns.map(c => columnView(c, false))}</Box>
     } else if (layout === 'agenda') {
       const days = Number(model.view.options.listDayCount) || 7
-      const agenda = buildAgenda(model.tasks, now, days)
+      const agenda = memo(`${drawn.key}|agenda|${filterKey(t)}|${days}`, () => buildAgenda(model.tasks, now, days))
       const overdueShown = isExpanded('overdue') ? agenda.overdue : agenda.overdue.slice(0, CAP)
       caption += ` · next ${agenda.days.length} days`
       body = (
@@ -556,10 +637,11 @@ export const register: Register = on => {
         </Box>
       )
     } else {
-      const graph = buildGraph(model.tasks, vault.tasks, { hideDone: !!t.hideDone })
+      const graph = memo(`${drawn.key}|graph|${filterKey(t)}|${!!t.hideDone}`, () => buildGraph(model.tasks, vault.tasks, { hideDone: !!t.hideDone }))
       const dots = graph.nodes.filter(n => n.task?.done && !n.missing).length
       const zoom = t.zoom > 0 ? t.zoom : 1
-      const view = graph.nodes.length ? zoomView(graphSvg(graph, settings, t.orientation), zoom, t.pan) : undefined
+      const svg = graph.nodes.length ? memo(`${drawn.key}|svg|${filterKey(t)}|${!!t.hideDone}|${t.orientation}`, () => graphSvg(graph, settings, t.orientation)) : undefined
+      const view = svg ? zoomView(svg, zoom, t.pan) : undefined
       caption += ` · ${graph.edges.length} dependenc${graph.edges.length === 1 ? 'y' : 'ies'}` +
         (graph.criticalDays ? ` · critical path ${Math.round(graph.criticalDays * 10) / 10} days (red)` : '') +
         (graph.isolated ? ` · ${graph.isolated} without dependencies not drawn` : '') +
@@ -620,7 +702,9 @@ export const register: Register = on => {
         </Box>
         <Text dimColor>{model.view.name} · {caption}{settings.found ? '' : ' · TaskNotes settings not found, using defaults'}</Text>
         <Text dimColor>
-          Filters run over the {vault.files.length.toLocaleString('en')} notes in {settings.tasksFolder} and {settings.archiveFolder}, not the whole vault.
+          {vault.archiveIncluded
+            ? `Filters run over the ${vault.files.length.toLocaleString('en')} notes in ${settings.tasksFolder} and ${settings.archiveFolder}, not the whole vault.`
+            : `Filters run over the ${vault.files.length.toLocaleString('en')} notes in ${settings.tasksFolder}; this base leaves ${settings.archiveFolder} out.`}
         </Text>
         {pillRow('project', 'Projects', facetsOf.projects, filters.projects, '')}
         {pillRow('context', 'Contexts', facetsOf.contexts, filters.contexts, '@')}

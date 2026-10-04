@@ -225,3 +225,19 @@ test('graph: interactive SVG, done tasks as dots, one press hides them; filters 
   const flags = await $.command.run({ command: 'taskboard', args: 'kanban --context=docs,release --list' })
   expect(flags.text).toContain('filtered to context @docs, context @release: 2 of 6 tasks')
 })
+
+test('a base that leaves the archive out reads only the archived blockers it needs', async ($, on) => {
+  const reads: string[] = []
+  const host = serveVault(on, { reads })
+  host.content['TaskNotes/Tasks/Ship.md'] = '---\ntitle: Ship\ntype: task\nstatus: open\nblockedBy:\n  - "[[Old task]]"\n---\n'
+  host.content['TaskNotes/Archive/Unrelated.md'] = '---\ntitle: Unrelated\ntype: task\nstatus: done\n---\n'
+  await $.command.run({ command: 'taskboard', args: 'kanban --graph' })
+  const ui = await mount($)
+  const svg = String((await ui.find({ type: 'Svg' }))?.props.source ?? '')
+  expect(svg).toContain('<title>Old task · Done</title>') // a finished blocker, not "not found"
+  expect(svg).not.toContain('not found')
+  expect((await ui.find({ type: 'Text', text: /^Filters run over/ }))?.text).toContain('this base leaves TaskNotes/Archive out')
+  expect(reads.some(r => r.endsWith('Old task.md'))).toBe(true)
+  expect(reads.some(r => r.endsWith('Unrelated.md'))).toBe(false)
+  await ui.unmount()
+})

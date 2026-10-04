@@ -83,7 +83,9 @@ Claude Code 2.1.286). The plugin is named `tasknotes-preview`.
 
   Anything it does not know is **skipped and named** under the caption, never guessed.
 - **Scope.** Filters run over the notes in TaskNotes' tasks and archive folders, not the whole
-  vault, so a base about other notes shows nothing. `file.ctime` is the note's `dateCreated`
+  vault, so a base about other notes shows nothing. When a base's own filters leave the archive
+  out (`!file.inFolder("…/Archive")`), the archive is not read at all, apart from the archived
+  notes that open tasks name as blockers, so a finished blocker still shows as finished. `file.ctime` is the note's `dateCreated`
   (the pane cannot read creation times), and `file.tags` are the frontmatter tags.
 - **What a base says is what you get.** TaskNotes' default bases filter on `file.hasTag("task")`.
   If your tasks are identified by a property instead (`type: task`), those views show only
@@ -104,8 +106,13 @@ claude plugin test .
 - `hooks/bases.ts`: `.base` files: views, filters, sort, groups.
 - `hooks/tasknotes.ts`: TaskNotes settings and the task model.
 - `hooks/model.ts`, `hooks/agenda.ts`, `hooks/graph.ts`: what each layout shows.
-- `tests/`: 27 tests run by `claude plugin test`. There is no real filesystem; the tests' hooks
+- `tests/`: 29 tests run by `claude plugin test`. There is no real filesystem; the tests' hooks
   serve a small vault.
+
+Every hook has a 10-second budget of its own time, and a pane redraws on every press and
+resize. So the vault's task model is built once per set of file changes, a view is evaluated
+once per day, and each layout's result is kept until something it reads changes.
+`tests/perf.test.tsx` holds a 1,600-note vault to those limits.
 
 The engine only follows `$` (the engine interface) inside the hooks module itself, so
 everything that reads files lives in `register.tsx`; everything else is pure.
