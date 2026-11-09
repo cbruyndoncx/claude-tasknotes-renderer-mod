@@ -51,8 +51,8 @@ Show done**.
 
 ## Install
 
-This is a *mod*: a plugin of Claude Code function hooks (early access; written against
-Claude Code 2.1.286). The plugin is named `tasknotes-preview`.
+This is a *mod*: a plugin of Claude Code function hooks (written against
+Claude Code 2.1.286; mods are generally available since 2.1.287). The plugin is named `tasknotes-preview`.
 
 1. Clone this repository.
 2. Add it to `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of your **user** settings
